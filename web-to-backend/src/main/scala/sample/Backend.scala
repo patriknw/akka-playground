@@ -6,14 +6,17 @@ import akka.actor.ActorRef
 import akka.dispatch.Dispatchers
 import akka.routing.CyclicIterator
 import akka.routing.Routing
+import akka.actor.PoisonPill
+import akka.config.Supervision
+import akka.actor.ReceiveTimeout
 
 object Backend {
 
   case class TranslationRequest(text: String)
   case class TranslationResponse(text: String, words: Int)
 
-  private val backendDispatcher = Dispatchers.newExecutorBasedEventDrivenDispatcher("backend-dispatcher")
-    .setCorePoolSize(4)
+  val backendDispatcher = Dispatchers.newExecutorBasedEventDrivenDispatcher("backend-dispatcher")
+    .setCorePoolSize(7)
     .build
 
   val translationService = loadBalanced(10, actorOf[TranslationService])
@@ -31,12 +34,39 @@ object Backend {
 
     def receive = {
       case TranslationRequest(text) ⇒
-        val future1 = (translator ? text)
-        val translatedText = future1.get.asInstanceOf[String]
-        val future2 = (counter ? text)
-        val words = future2.get.asInstanceOf[Int]
+        for (replyTo ← self.sender) {
+          val aggregator = actorOf(new Aggregator(replyTo)).start()
+          translator.tell(text, aggregator)
+          counter.tell(text, aggregator)
+        }
+    }
+  }
 
-        self.channel ! TranslationResponse(translatedText, words)
+  class Aggregator(replyTo: ActorRef) extends Actor {
+    self.dispatcher = backendDispatcher
+    self.lifeCycle = Supervision.Temporary
+    self.receiveTimeout = Some(1000)
+
+    var textResult: Option[String] = None
+    var lengthResult: Option[Int] = None
+
+    def receive = {
+      case text: String ⇒
+        textResult = Some(text)
+        replyWhenDone()
+      case length: Int ⇒
+        lengthResult = Some(length)
+        replyWhenDone()
+      case ReceiveTimeout ⇒
+        self.stop()
+    }
+
+    def replyWhenDone() {
+      for (text ← textResult; length ← lengthResult) {
+        replyTo ! TranslationResponse(text, length)
+        self.stop()
+      }
+
     }
   }
 
