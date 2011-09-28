@@ -29,8 +29,8 @@ object Backend {
   class TranslationService extends Actor {
     self.dispatcher = backendDispatcher
 
-    val translator = loadBalanced(4, actorOf[Translator])
-    val counter = loadBalanced(4, actorOf[Counter])
+    val translator = actorOf[Translator].start()
+    val counter = actorOf[Counter].start()
 
     def receive = {
       case TranslationRequest(text) ⇒
@@ -75,6 +75,7 @@ object Backend {
 
     def receive = {
       case x: String ⇒
+        // simulate some work
         Thread.sleep(100)
         val result = x.toUpperCase
         self.channel ! result
@@ -86,6 +87,7 @@ object Backend {
 
     def receive = {
       case x: String ⇒
+        // simulate some work
         Thread.sleep(100)
         val result = x.split(" ").length
         self.channel ! result
