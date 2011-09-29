@@ -13,11 +13,6 @@ import akka.routing.Routing
 import sample.Backend.TranslationRequest
 import sample.Backend.TranslationResponse
 import sample.Backend.translationService
-import akka.actor.Scheduler
-import akka.actor.PoisonPill
-import java.util.concurrent.TimeUnit.SECONDS
-import akka.actor.ReceiveTimeout
-import akka.config.Supervision
 
 object Frontend {
 
@@ -25,9 +20,8 @@ object Frontend {
     val Translate = "/translate"
   }
 
-  // private val frontendDispatcher = Backend.backendDispatcher
   private val frontendDispatcher = Dispatchers.newExecutorBasedEventDrivenDispatcher("frontend-dispatcher")
-    .setCorePoolSize(1)
+    .setCorePoolSize(4)
     .build
 
   private def loadBalanced(poolSize: Int, actor: ⇒ ActorRef): ActorRef = {
@@ -63,27 +57,15 @@ object Frontend {
     def receive = {
       case get: Get ⇒
         val text = get.request.getParameter("text")
-        val responseHandler = actorOf(new ResponseHandler(get)).start()
-        translationService.tell(TranslationRequest(text), responseHandler)
-      case other: RequestMethod ⇒
-        other.NotAllowed("Invalid method for this endpoint.")
+        (translationService ? TranslationRequest(text)).as[TranslationResponse] match {
+          case Some(TranslationResponse(translatedText, words)) ⇒
+            get.OK("Translated %s words to: %s".format(words, translatedText))
+          case None ⇒
+            get.Timeout("Timeout")
+        }
     }
   }
 
-  class ResponseHandler(get: Get) extends Actor {
-    self.dispatcher = frontendDispatcher
-    self.lifeCycle = Supervision.Temporary
-    self.receiveTimeout = Some(1000)
-
-    def receive = {
-      case TranslationResponse(translatedText, words) ⇒
-        get.OK("Translated %s words to: %s".format(words, translatedText))
-        self.stop()
-      case ReceiveTimeout ⇒
-        get.Timeout("Timeout")
-        self.stop()
-    }
-  }
 }
 
 class Boot {
